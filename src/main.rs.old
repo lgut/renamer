@@ -1,0 +1,96 @@
+use rand::{
+    distributions::{Alphanumeric},
+    Rng,
+};
+use rayon::prelude::*;
+use std::{
+    fs::{read_dir, DirEntry, File, OpenOptions},
+    io::Write,
+    path::Path,
+    time::{Duration, Instant},
+};
+
+const PATH: &'static str = "/home/luis/tmp/renamer_test_files";
+const OUT: &'static str = "/home/luis/tmp/renamer_output";
+
+fn main() {
+    let mut paths: Vec<_> = read_dir(PATH)
+        .expect("Expected a valid file path")
+        .map(|r| r.unwrap())
+        .collect();
+    paths.sort_by_key(|dir| dir.path());
+
+    println!("Performing single thread test");
+    let first_dur = linear_rename(&paths);
+
+    println!("Performing multithread thread test");
+    let second_dur = parallel_rename(&paths);
+
+    let shorter_dur = match first_dur <= second_dur {
+        true => "Single Thread",
+        false => "Multi Thread",
+    };
+
+    let log_entry = format!(
+        "{},{},{}\n",
+        first_dur.as_micros(),
+        second_dur.as_micros(),
+        shorter_dur
+    );
+    print!("{}", log_entry);
+
+    let log_exists = Path::new("log.csv").exists();
+    let mut f = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("log.csv")
+        .expect("Could not open log.csv");
+
+    if !log_exists {
+        f.write_all("Single Threaded Duration,Multithreaded Duration,Winner\n".as_bytes())
+            .expect("Could not write header to log file");
+    }
+    f.write_all(&log_entry.as_bytes())
+        .expect("Could not write to log file");
+}
+
+fn linear_rename(paths: &Vec<DirEntry>) -> Duration {
+    let sampler = rand::thread_rng().sample_iter(&Alphanumeric);
+
+    let start = Instant::now();
+    let hash: String = sampler.take(33).map(char::from).collect();
+    for (i, file) in paths.iter().enumerate() {
+        rename_routine(i, file, &hash);
+    }
+    let stop = Instant::now();
+    stop - start
+}
+
+fn parallel_rename(paths: &Vec<DirEntry>) -> Duration {
+    let sampler = rand::thread_rng().sample_iter(&Alphanumeric);
+
+    let start = Instant::now();
+    let hash: String = sampler.take(33).map(char::from).collect();
+
+    paths
+        .into_par_iter()
+        .enumerate()
+        .for_each(|(i, file)| rename_routine(i, file, &hash));
+    let stop = Instant::now();
+    stop - start
+}
+
+fn rename_routine(_i: usize, file: &DirEntry, hash: &str) {
+    // create new filename
+    let new_path = format!("{}/{}_{}", OUT, hash, &file.file_name().to_string_lossy());
+
+    let mut new_file =
+        File::create(&new_path).expect(&format!("Could not create file: {}", &new_path));
+    let mut old_file = File::open(file.path()).expect(&format!(
+        "Could not open file: {}",
+        &file.path().to_string_lossy()
+    ));
+
+    // copy file
+    std::io::copy(&mut old_file, &mut new_file).expect("Could not copy file");
+}
